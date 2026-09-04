@@ -69,7 +69,7 @@ func TestBinaryBodyFlagged(t *testing.T) {
 }
 
 func TestHandlerEndpoints(t *testing.T) {
-	h := handler(1 << 20)
+	h := handler(1<<20, NewStats())
 
 	// health
 	rec := httptest.NewRecorder()
@@ -105,11 +105,40 @@ func TestHandlerEndpoints(t *testing.T) {
 }
 
 func TestBodyTooLarge(t *testing.T) {
-	h := handler(16)
+	h := handler(16, NewStats())
 	req := httptest.NewRequest("POST", "/x", strings.NewReader(strings.Repeat("a", 100)))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 413 {
 		t.Fatalf("want 413, got %d", rec.Code)
+	}
+}
+
+func TestStatsTracking(t *testing.T) {
+	stats := NewStats()
+	h := handler(1<<20, stats)
+
+	for i := 0; i < 3; i++ {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/x", nil))
+	}
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/y", nil))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/stats", nil))
+	if rec.Code != 200 {
+		t.Fatalf("stats = %d", rec.Code)
+	}
+	var snap map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap["totalRequests"].(float64) != 5 {
+		t.Errorf("totalRequests = %v, want 5", snap["totalRequests"])
+	}
+	if snap["uniqueIps"].(float64) != 1 {
+		t.Errorf("uniqueIps = %v", snap["uniqueIps"])
+	}
+	if snap["perMethod"].(map[string]any)["POST"].(float64) != 3 {
+		t.Errorf("perMethod POST = %v", snap["perMethod"])
 	}
 }

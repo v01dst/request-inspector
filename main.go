@@ -7,8 +7,72 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+// Stats tracks served requests (in-memory, atomic via mutex).
+type Stats struct {
+	mu        sync.Mutex
+	total     int
+	perIP     map[string]int
+	perMethod map[string]int
+	startedAt time.Time
+}
+
+func NewStats() *Stats {
+	return &Stats{
+		perIP:     map[string]int{},
+		perMethod: map[string]int{},
+		startedAt: time.Now(),
+	}
+}
+
+func (s *Stats) record(ip, method string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.total++
+	s.perIP[ip]++
+	s.perMethod[method]++
+}
+
+func (s *Stats) snapshot() map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return map[string]any{
+		"totalRequests": s.total,
+		"uniqueIps":     len(s.perIP),
+		"topIps":        topN(s.perIP, 5),
+		"perMethod":     s.perMethod,
+		"uptimeSec":     int(time.Since(s.startedAt).Seconds()),
+	}
+}
+
+func topN(m map[string]int, n int) map[string]int {
+	out := map[string]int{}
+	type kv struct {
+		k string
+		v int
+	}
+	list := make([]kv, 0, len(m))
+	for k, v := range m {
+		list = append(list, kv{k, v})
+	}
+	for i := 0; i < len(list); i++ {
+		for j := i + 1; j < len(list); j++ {
+			if list[j].v > list[i].v {
+				list[i], list[j] = list[j], list[i]
+			}
+		}
+	}
+	for i, item := range list {
+		if i >= n {
+			break
+		}
+		out[item.k] = item.v
+	}
+	return out
+}
 
 const version = "1.0.0"
 
@@ -99,13 +163,23 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = enc.Encode(v)
 }
 
-func handler(maxBody int) http.HandlerFunc {
+func handler(maxBody int, stats *Stats) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+		if fwd := r.Header.Get("x-forwarded-for"); fwd != "" {
+			ip = strings.TrimSpace(strings.Split(fwd, ",")[0])
+		}
+
 		switch r.URL.Path {
 		case "/health":
+			stats.record(ip, r.Method)
 			writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 			return
 		case "/":
+			stats.record(ip, r.Method)
 			writeJSON(w, http.StatusOK, map[string]any{
 				"service": "request-inspector",
 				"version": version,
@@ -113,15 +187,21 @@ func handler(maxBody int) http.HandlerFunc {
 				"usage":   "any method, any path → JSON dump of your request",
 			})
 			return
+		case "/stats":
+			stats.record(ip, r.Method)
+			writeJSON(w, http.StatusOK, stats.snapshot())
+			return
 		}
 
 		if r.ContentLength > int64(maxBody) {
+			stats.record(ip, r.Method)
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{
 				"error": fmt.Sprintf("body too large (max %d bytes)", maxBody),
 			})
 			return
 		}
 
+		stats.record(ip, r.Method)
 		info := describe(r, true, maxBody)
 		w.Header().Set("x-inspected-by", "request-inspector/"+version)
 		writeJSON(w, http.StatusOK, info)
@@ -133,7 +213,7 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
-	http.Handle("/", handler(1<<20))
+	http.Handle("/", handler(1<<20, NewStats()))
 	fmt.Printf("request-inspector listening on :%s\n", port)
 	panic(http.ListenAndServe(":"+port, nil))
 }
