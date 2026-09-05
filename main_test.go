@@ -142,3 +142,35 @@ func TestStatsTracking(t *testing.T) {
 		t.Errorf("perMethod POST = %v", snap["perMethod"])
 	}
 }
+
+func TestParseUA(t *testing.T) {
+	cases := []struct {
+		ua      string
+		browser string
+		os      string
+		device  string
+	}{
+		{"Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/120.0 Safari/537.36 Edg/120.0", "Edge", "Windows", "desktop"},
+		{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) Version/17.0 Safari/605.1.15", "Safari", "macOS", "desktop"},
+		{"Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/120.0 Mobile", "Chrome", "Android", "mobile"},
+		{"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Version/17.0 Mobile Safari", "Safari", "iOS", "mobile"},
+		{"curl/8.18.0", "curl", "unknown", "other"},
+		{"Mozilla/5.0 (compatible; Googlebot/2.1)", "bot", "unknown", "other"},
+		{"", "unknown", "unknown", "desktop"},
+	}
+	for _, c := range cases {
+		got := parseUA(c.ua)
+		if got.Browser != c.browser || got.OS != c.os || got.Device != c.device {
+			t.Errorf("parseUA(%q) = %+v, want %s/%s/%s", c.ua, got, c.browser, c.os, c.device)
+		}
+	}
+}
+
+func TestDescribeIncludesUA(t *testing.T) {
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set("User-Agent", "curl/8.18.0")
+	info := describe(req, false, 0)
+	if info.UA.Browser != "curl" {
+		t.Fatalf("ua = %+v", info.UA)
+	}
+}

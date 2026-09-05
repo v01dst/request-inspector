@@ -76,6 +76,57 @@ func topN(m map[string]int, n int) map[string]int {
 
 const version = "1.0.0"
 
+// UAParse extracts a coarse browser/os/device label from a user-agent string.
+type UAParse struct {
+	Browser string `json:"browser"`
+	OS      string `json:"os"`
+	Device  string `json:"device"`
+}
+
+func parseUA(ua string) UAParse {
+	browser, os, device := "unknown", "unknown", "desktop"
+	switch {
+	case strings.Contains(ua, "Edg/"):
+		browser = "Edge"
+	case strings.Contains(ua, "OPR/") || strings.Contains(ua, "Opera"):
+		browser = "Opera"
+	case strings.Contains(ua, "Chrome/"):
+		browser = "Chrome"
+	case strings.Contains(ua, "Safari") && strings.Contains(ua, "Version/"):
+		browser = "Safari"
+	case strings.Contains(ua, "Firefox/"):
+		browser = "Firefox"
+	case strings.Contains(ua, "curl/"):
+		browser = "curl"
+	case strings.Contains(ua, "Wget/"):
+		browser = "wget"
+	case strings.Contains(ua, "bot") || strings.Contains(ua, "Bot") || strings.Contains(ua, "spider"):
+		browser = "bot"
+	}
+	switch {
+	case strings.Contains(ua, "Windows"):
+		os = "Windows"
+	case strings.Contains(ua, "Android"):
+		os = "Android"
+	case strings.Contains(ua, "iPhone") || strings.Contains(ua, "iPad"):
+		os = "iOS"
+	case strings.Contains(ua, "Mac OS X") || strings.Contains(ua, "Macintosh"):
+		os = "macOS"
+	case strings.Contains(ua, "Linux"):
+		os = "Linux"
+	}
+	if strings.Contains(ua, "Mobile") || strings.Contains(ua, "iPhone") || strings.Contains(ua, "Android") {
+		device = "mobile"
+	}
+	if strings.Contains(ua, "iPad") || strings.Contains(ua, "Tablet") {
+		device = "tablet"
+	}
+	if browser == "curl" || browser == "wget" || browser == "bot" {
+		device = "other"
+	}
+	return UAParse{Browser: browser, OS: os, Device: device}
+}
+
 // RequestInfo captures everything visible about an incoming request.
 type RequestInfo struct {
 	Method    string            `json:"method"`
@@ -90,6 +141,7 @@ type RequestInfo struct {
 	Body      string            `json:"body"`
 	UserAgent string            `json:"userAgent"`
 	Cookies   map[string]string `json:"cookies"`
+	UA        UAParse           `json:"ua"`
 	Timestamp string            `json:"timestamp"`
 }
 
@@ -142,6 +194,7 @@ func describe(r *http.Request, includeBody bool, maxBody int) RequestInfo {
 		Body:      body,
 		UserAgent: r.UserAgent(),
 		Cookies:   cookies,
+		UA:        parseUA(r.UserAgent()),
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 }
